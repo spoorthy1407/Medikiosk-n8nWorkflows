@@ -1,0 +1,358 @@
+{
+  "name": "MediKiosk Backend – AI Triage & Booking Notifications",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "medikiosk-triage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c71dd37a-b071-4788-8867-e4c7031059a4",
+      "name": "Triage Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "8bb8ccce-0801-49bc-b6d5-64885b91355e"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5.4-mini",
+          "cachedResultName": "GPT-5.4-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Patient: {{ $json.body.name }}, age {{ $json.body.age }}, {{ $json.body.gender }}.\nReason for visit: {{ $json.body.symptoms }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "instructions": "You are the triage nurse at Neelima Hospital. Choose exactly one ward for the patient:\n- \"Emergency Ward\": chest pain, breathing difficulty, heavy bleeding, accident/injury, unconsciousness, stroke signs, seizures, high fever in infants, poisoning, severe pain.\n- \"Mental Health Ward\": anxiety, depression, stress, panic, insomnia, suicidal thoughts, mood or behaviour problems.\n- \"General Ward\": everything else (cough, cold, fever, headache, stomach ache, check-ups, minor issues).\nWhen unsure between General and Emergency, choose Emergency.",
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "ward_choice",
+              "schema": "{\"type\":\"object\",\"properties\":{\"ward\":{\"type\":\"string\",\"enum\":[\"General Ward\",\"Emergency Ward\",\"Mental Health Ward\"]}},\"required\":[\"ward\"],\"additionalProperties\":false}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "id": "075273ef-5dce-4b41-9682-83a3da90cb5d",
+      "name": "Message a model",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "Gateway credits",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ward: (typeof $json.output[0].content[0].text === 'object' ? $json.output[0].content[0].text.ward : $json.output[0].content[0].text) }) }}",
+        "options": {}
+      },
+      "id": "f86e70b7-2779-4712-9d73-de73442801b9",
+      "name": "Send Ward to Website",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        576,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "medikiosk-booked",
+        "options": {}
+      },
+      "id": "af17a250-0c9c-4855-ab7f-2b874f7c9403",
+      "name": "Appointment Booked",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        416
+      ],
+      "webhookId": "75f9b368-6404-4022-9105-98f3f4f6bf30"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Appointment Booked\").item.json.body.doctor_email }}",
+        "subject": "=New consultation: {{ $(\"Appointment Booked\").item.json.body.patient_name }} – Token #{{ $(\"Appointment Booked\").item.json.body.token }} at {{ $(\"Appointment Booked\").item.json.body.time }}",
+        "message": "=<p>Hello {{ $(\"Appointment Booked\").item.json.body.doctor_name }},</p><p>A new patient has been assigned to you.</p><ul><li><b>Patient:</b> {{ $(\"Appointment Booked\").item.json.body.patient_name }} ({{ $(\"Appointment Booked\").item.json.body.patient_phone }})</li><li><b>Reason:</b> {{ $(\"Appointment Booked\").item.json.body.symptoms }}</li><li><b>Ward:</b> {{ $(\"Appointment Booked\").item.json.body.ward }}</li><li><b>Room:</b> {{ $(\"Appointment Booked\").item.json.body.room }}</li><li><b>Date / time:</b> {{ $(\"Appointment Booked\").item.json.body.date }}, {{ $(\"Appointment Booked\").item.json.body.time }}</li><li><b>Token:</b> #{{ $(\"Appointment Booked\").item.json.body.token }}</li></ul><p>– Neelima Hospital MediKiosk</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital"
+        }
+      },
+      "id": "23c73b49-5b0d-4efc-8bca-940f03299648",
+      "name": "Email Doctor",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        224
+      ],
+      "webhookId": "f5d19f27-cfc8-4668-acda-fe65625525f5",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "F1PQMZv7O3ltTKzN",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Appointment Booked\").item.json.body.patient_email }}",
+        "subject": "=Appointment confirmed – Token #{{ $(\"Appointment Booked\").item.json.body.token }}, {{ $(\"Appointment Booked\").item.json.body.date }} {{ $(\"Appointment Booked\").item.json.body.time }}",
+        "message": "=<p>Dear {{ $(\"Appointment Booked\").item.json.body.patient_name }},</p><p>Your appointment at Neelima Hospital is booked.</p><ul><li><b>Doctor:</b> {{ $(\"Appointment Booked\").item.json.body.doctor_name }}</li><li><b>Ward:</b> {{ $(\"Appointment Booked\").item.json.body.ward }}</li><li><b>Room:</b> {{ $(\"Appointment Booked\").item.json.body.room }}</li><li><b>Date / time:</b> {{ $(\"Appointment Booked\").item.json.body.date }}, {{ $(\"Appointment Booked\").item.json.body.time }}</li><li><b>Your token:</b> #{{ $(\"Appointment Booked\").item.json.body.token }}</li></ul><p><b>{{ $(\"Appointment Booked\").item.json.body.message }}</b></p><p>You can follow the live queue on the MediKiosk website.</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital"
+        }
+      },
+      "id": "2bfdfa3a-bd3f-4122-8e1c-0ecbcae51c70",
+      "name": "Email Patient",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        416
+      ],
+      "webhookId": "41eaee00-fed7-437e-a958-a91861c1e312",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "F1PQMZv7O3ltTKzN",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "cachedResultName": "Neelima Hospital dummy data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Bookings"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Appointment ID": "={{ $(\"Appointment Booked\").item.json.body.appointment_id }}",
+            "Date": "={{ $(\"Appointment Booked\").item.json.body.date }}",
+            "Time": "={{ $(\"Appointment Booked\").item.json.body.time }}",
+            "Token": "={{ $(\"Appointment Booked\").item.json.body.token }}",
+            "Patient Name": "={{ $(\"Appointment Booked\").item.json.body.patient_name }}",
+            "Phone": "={{ $(\"Appointment Booked\").item.json.body.patient_phone }}",
+            "Symptoms": "={{ $(\"Appointment Booked\").item.json.body.symptoms }}",
+            "Ward Name": "={{ $(\"Appointment Booked\").item.json.body.ward }}",
+            "Doctor Name": "={{ $(\"Appointment Booked\").item.json.body.doctor_name }}",
+            "Room": "={{ $(\"Appointment Booked\").item.json.body.room }}"
+          },
+          "schema": [
+            {
+              "id": "Appointment ID",
+              "displayName": "Appointment ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Time",
+              "displayName": "Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Token",
+              "displayName": "Token",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Patient Name",
+              "displayName": "Patient Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Symptoms",
+              "displayName": "Symptoms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Ward Name",
+              "displayName": "Ward Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Doctor Name",
+              "displayName": "Doctor Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Room",
+              "displayName": "Room",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c4332aa-000b-4f47-aa99-99ad959a5692",
+      "name": "Log Booking in Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        608
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SP5hoCaHR0Cj5qsx",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Triage Request": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Send Ward to Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appointment Booked": {
+      "main": [
+        [
+          {
+            "node": "Email Doctor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Doctor": {
+      "main": [
+        [
+          {
+            "node": "Email Patient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Patient": {
+      "main": [
+        [
+          {
+            "node": "Log Booking in Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "52daac5b-e2cf-481f-a2fb-5cf56480645f",
+  "meta": {
+    "instanceId": "ba4e7f178a090280db4c4aef4a11ebdc20af9d46a26a471603f7be43d415ca02"
+  },
+  "nodeGroups": [],
+  "id": "tR3tG0v8i711emG7",
+  "tags": []
+}
