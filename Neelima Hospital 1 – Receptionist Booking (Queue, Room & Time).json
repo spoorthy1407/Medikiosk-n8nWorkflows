@@ -1,0 +1,1059 @@
+{
+  "name": "Neelima Hospital 1 – Receptionist Booking (Queue, Room & Time)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Welcome to Neelima Hospital",
+        "formDescription": "Neelima Hospital Receptionist Form",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "What is your name ?",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your age ?",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your email?",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your phone number?",
+              "fieldType": "number",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "What is your query?",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "path": "neelima-hospital-booking"
+        }
+      },
+      "id": "696ec50d-162d-4414-a68b-ce8658b849bc",
+      "name": "On form submission",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "13327941-8392-43ff-ad80-2598eb9a87ed"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "qwen2.5:7b",
+          "mode": "list",
+          "cachedResultName": "QWEN2.5:7B"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Patient age: {{ $json['What is your age ?'] }}\nPatient query: {{ $json['What is your query?'] }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "instructions": "You are the hospital receptionist agent for Neelima Hospital. Send the patient to exactly one ward:\n1. \"General Ward\": fever, cough, cold, headache, stomach pain, vomiting, check-ups and other general problems.\n2. \"Emergency Ward\": urgent or immediate care such as accidents, heart attack, chest pain, breathing difficulty, heavy bleeding, unconsciousness, poisoning.\n3. \"Mental Health Ward\": depression, trauma, anxiety, overthinking, stress, insomnia and other mental health conditions.\nWhen unsure between General and Emergency, choose Emergency.",
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "ward_choice",
+              "schema": "{\"type\":\"object\",\"properties\":{\"ward\":{\"type\":\"string\",\"enum\":[\"General Ward\",\"Emergency Ward\",\"Mental Health Ward\"]}},\"required\":[\"ward\"],\"additionalProperties\":false}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "id": "8bface88-f652-4c0b-bf61-25b5d0c206b7",
+      "name": "Message a model",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        272,
+        128
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "yfbEufufXXAqMJpB",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "cachedResultName": "Neelima Hospital dummy data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "813743364",
+          "cachedResultName": "Sheet1"
+        },
+        "options": {}
+      },
+      "id": "695de052-5ae9-44b8-8626-2668c2bf9ef5",
+      "name": "Get All Doctors",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        624,
+        128
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "pk5KT2Le0epcxAAF",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Picks the doctor, gives the patient a token, queue number and estimated time.\nconst SLOT_MIN = 15; // minutes per consultation\nconst now = DateTime.now().setZone('Asia/Kolkata');\nconst nowMin = now.hour * 60 + now.minute;\n\nconst form = $('On form submission').first().json;\nlet aiText = $('Message a model').first().json.output[0].content[0].text;\nlet ward = (aiText && typeof aiText === 'object') ? aiText.ward : String(aiText || '');\nif (typeof ward === 'string' && ward.trim().startsWith('{')) {\n  try { ward = JSON.parse(ward).ward; } catch (e) {}\n}\nconst norm = s => String(s || '').toLowerCase().replace(/\\s+/g, ' ').trim();\nconst w = norm(ward);\nif (w.includes('emergency')) ward = 'Emergency Ward';\nelse if (w.includes('mental')) ward = 'Mental Health Ward';\nelse ward = 'General Ward';\nconst isEmergency = ward === 'Emergency Ward';\nconst isMental = ward === 'Mental Health Ward';\n// Emergency and Mental Health patients are critical: they skip the queue and are seen immediately.\nconst isPriority = isEmergency || isMental;\n\nfunction toMin(t) {\n  const m = String(t).match(/(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?/i);\n  if (!m) return null;\n  let h = parseInt(m[1], 10);\n  const min = m[2] ? parseInt(m[2], 10) : 0;\n  const ap = (m[3] || '').toLowerCase();\n  if (ap === 'pm' && h < 12) h += 12;\n  if (ap === 'am' && h === 12) h = 0;\n  return h * 60 + min;\n}\nfunction shiftOf(text) {\n  const parts = String(text || '').split(/\\s*(?:–|—|-|to)\\s*/i).filter(p => p.trim() !== '');\n  if (parts.length < 2) return null;\n  const start = toMin(parts[0]);\n  const end = toMin(parts[1]);\n  if (start === null || end === null) return null;\n  // overnight shift such as 12:00 PM - 1:00 AM\n  return { start, end: end <= start ? end + 1440 : end };\n}\nfunction fmt(mins) {\n  return now.startOf('day').plus({ minutes: mins % 1440 }).toFormat('h:mm a');\n}\n\nconst doctors = $input.all()\n  .map(i => i.json)\n  .filter(d => d['Doctor Name'])\n  .map(d => {\n    const shift = shiftOf(d['Available Time']);\n    let n = nowMin; // 'now' on this doctor's shift clock (handles shifts past midnight)\n    if (shift && shift.end > 1440 && n < shift.end - 1440) n += 1440;\n    const status = norm(d['Status']);\n    const offDuty = status.includes('off duty') || status.includes('leave');\n    const onDuty = !offDuty && (shift ? (n >= shift.start && n < shift.end) : true);\n    const queue = parseInt(d['Queue count'], 10) || 0;\n    const tokenDigits = String(d['Last token'] || '').match(/(\\d+)\\s*$/);\n    const lastToken = tokenDigits ? parseInt(tokenDigits[1], 10) : 0;\n    return { d, shift, onDuty, queue, lastToken, n };\n  });\n\nconst inWard = doctors.filter(x => norm(x.d['Ward Name']) === norm(ward));\n\n// When could each doctor see this patient? Only slots that fit inside the shift count.\nfunction slotFor(x) {\n  if (isPriority) return x.onDuty ? { start: x.n, consult: x.n, now: x.n } : null;\n  let start;\n  if (x.onDuty) start = x.n;\n  else if (x.shift && x.shift.start > x.n) start = x.shift.start;\n  else return null;\n  const consult = start + x.queue * SLOT_MIN;\n  if (x.shift && consult + SLOT_MIN > x.shift.end) return null; // would run past the shift\n  return { start, consult, now: x.n };\n}\nfunction best(list) {\n  const options = list.map(x => ({ x, s: slotFor(x) })).filter(o => o.s);\n  // priority: least busy on-duty doctor; normal: earliest slot\n  options.sort((a, b) => isPriority ? ((a.x.queue - b.x.queue) || 0) : ((a.s.consult - a.s.now) - (b.s.consult - b.s.now)) || (a.x.queue - b.x.queue));\n  return options[0] || null;\n}\n\n// 1) doctor of this ward with the earliest free slot today\nlet choice = best(inWard);\n// 2) mental health with no mental health doctor on duty: an emergency doctor on duty\nif (!choice && isMental) choice = best(doctors.filter(x => norm(x.d['Ward Name']).includes('emergency')));\n// 3) critical patient still unassigned: any doctor on duty now\nif (!choice && isPriority) choice = best(doctors);\nconst pick = choice ? choice.x : null;\nconst startMin = choice ? choice.s.start : nowMin;\nconst nowOnShift = choice ? choice.s.now : nowMin;\n\nconst base = {\n  patientName: form['What is your name ?'],\n  patientAge: form['What is your age ?'],\n  patientEmail: form['What is your email?'],\n  patientPhone: String(form['What is your phone number?']),\n  query: form['What is your query?'],\n  ward,\n  isEmergency,\n  isPriority,\n  priority: isPriority ? 'URGENT – immediate treatment' : 'Normal',\n  bookedAt: now.toFormat('dd LLL yyyy, h:mm a'),\n};\n\nif (!pick) {\n  return [{ json: Object.assign({}, base, { found: false, reason: isPriority ? 'CRITICAL patient and no doctor is on duty right now' : 'No doctor of this ward is available for the rest of today' }) }];\n}\n\nconst prefix = ward === 'Emergency Ward' ? 'E' : (ward === 'Mental Health Ward' ? 'M' : 'G');\nconst tokenNumber = pick.lastToken + 1;\nconst tokenLabel = prefix + '-' + String(tokenNumber).padStart(2, '0');\nconst patientsAhead = isPriority ? 0 : pick.queue;\nconst queuePosition = patientsAhead + 1;\nconst consultMin = startMin + patientsAhead * SLOT_MIN;\nconst waitMinutes = Math.max(0, consultMin - nowOnShift);\nconst estimatedTime = isPriority ? 'Immediately (' + fmt(nowOnShift) + ')' : fmt(consultMin);\nconst waitText = isPriority ? 'Priority case – go to room ' + (pick.d['Room No'] || '') + ' now, no waiting' : (waitMinutes === 0 ? 'No waiting – you are next' : 'About ' + waitMinutes + ' minutes');\n\nreturn [{ json: Object.assign({}, base, {\n  found: true,\n  doctorName: pick.d['Doctor Name'],\n  doctorEmail: pick.d['Email'],\n  doctorWard: pick.d['Ward Name'],\n  room: pick.d['Room No'] || 'Please ask at the reception',\n  shift: pick.d['Available Time'] || '',\n  tokenNumber,\n  tokenLabel,\n  queuePosition,\n  patientsAhead,\n  waitMinutes,\n  waitText,\n  estimatedTime,\n  newQueueCount: pick.queue + 1,\n  newStatus: pick.onDuty ? 'Consulting' : (pick.d['Status'] || 'Free'),\n}) }];\n"
+      },
+      "id": "5a3ce44f-2f43-4270-8692-f7a85e160692",
+      "name": "Assign Doctor, Token & Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "5b0cd2a9-31e9-407f-933f-8f080dd75660",
+      "name": "Doctor Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1072,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "mode": "list",
+          "cachedResultName": "Neelima Hospital dummy data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "813743364",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Doctor Name": "={{ $json.doctorName }}",
+            "Status": "={{ $json.newStatus }}",
+            "Queue count": "={{ $json.newQueueCount }}",
+            "Last token": "={{ $json.tokenLabel }}",
+            "Patient Name": "={{ $json.patientName }}",
+            "Summary": "={{ $json.query }}"
+          },
+          "matchingColumns": [
+            "Doctor Name"
+          ],
+          "schema": [
+            {
+              "id": "Doctor Name",
+              "displayName": "Doctor Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Patient Name",
+              "displayName": "Patient Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Summary",
+              "displayName": "Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Queue count",
+              "displayName": "Queue count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last token",
+              "displayName": "Last token",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aa61e94c-2369-4a29-a4bb-73d09ba413b4",
+      "name": "Update Doctor Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        800,
+        32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "pk5KT2Le0epcxAAF",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Assign Doctor, Token & Queue\").item.json.doctorEmail }}",
+        "subject": "={{ $(\"Assign Doctor, Token & Queue\").item.json.isPriority ? \"URGENT – \" : \"\" }}New patient {{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }} – Token {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }}",
+        "message": "=<p>Hello {{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName }},</p><p>You have a new patient for consultation.</p><ul><li><b>Patient:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }} (age {{ $(\"Assign Doctor, Token & Queue\").item.json.patientAge }}, phone {{ $(\"Assign Doctor, Token & Queue\").item.json.patientPhone }})</li><li><b>Priority:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.priority }}</li><li><b>Query:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.query }}</li><li><b>Ward:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.ward }}</li><li><b>Token:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }} &nbsp; <b>Queue number:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.queuePosition }}</li><li><b>Room:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.room }}</li><li><b>Expected consultation time:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.estimatedTime }}</li></ul><p>– Neelima Hospital Reception</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital"
+        }
+      },
+      "id": "213bbe92-07c8-40c3-a1de-a3552fdcd44e",
+      "name": "Email Doctor",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1024,
+        32
+      ],
+      "webhookId": "77e3fcb9-9100-4ffc-be5e-8788dd4597d0",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UF07QwDotauBaGDy",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $(\"Assign Doctor, Token & Queue\").item.json.patientEmail }}",
+        "subject": "=Appointment confirmed – Token {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }}, Room {{ $(\"Assign Doctor, Token & Queue\").item.json.room }}",
+        "message": "=<p>Dear {{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }},</p><p>Your consultation at <b>Neelima Hospital</b> is confirmed.</p><table cellpadding=\"6\" style=\"border-collapse:collapse;border:1px solid #ddd\"><tr><td><b>Token number</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }}</td></tr><tr><td><b>Queue number</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.queuePosition }} ({{ $(\"Assign Doctor, Token & Queue\").item.json.patientsAhead }} patient(s) ahead of you)</td></tr><tr><td><b>Doctor</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName }}</td></tr><tr><td><b>Ward</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.ward }}</td></tr><tr><td><b>Room number</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.room }}</td></tr><tr><td><b>Estimated consultation time</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.estimatedTime }}</td></tr><tr><td><b>Estimated wait</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.waitText }}</td></tr><tr><td><b>Your query</b></td><td>{{ $(\"Assign Doctor, Token & Queue\").item.json.query }}</td></tr></table><p><b>Please pay the bill at the counter and take the receipt.</b></p><p>Need help? Call the hospital at 9876543210.</p><p>Thank you!<br>Neelima Hospital</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital"
+        }
+      },
+      "id": "854b7a23-65d1-4af1-a752-f8109e5106f3",
+      "name": "Email Patient",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1248,
+        32
+      ],
+      "webhookId": "703d4c18-c7b9-424c-84b7-c9f39d20f864",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UF07QwDotauBaGDy",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "spoorthykamireddygari@gmail.com",
+        "subject": "={{ $(\"Assign Doctor, Token & Queue\").item.json.isPriority ? \"URGENT – \" : \"\" }}New booking: {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }} – {{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }} → {{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName }}",
+        "message": "=<p>New appointment booked at {{ $(\"Assign Doctor, Token & Queue\").item.json.bookedAt }}.</p><ul><li><b>Patient:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }}, age {{ $(\"Assign Doctor, Token & Queue\").item.json.patientAge }}</li><li><b>Phone / email:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.patientPhone }} / {{ $(\"Assign Doctor, Token & Queue\").item.json.patientEmail }}</li><li><b>Query:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.query }}</li><li><b>Ward:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.ward }}</li><li><b>Doctor:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName }} ({{ $(\"Assign Doctor, Token & Queue\").item.json.shift }})</li><li><b>Token:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }} &nbsp; <b>Queue number:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.queuePosition }}</li><li><b>Room:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.room }}</li><li><b>Estimated consultation time:</b> {{ $(\"Assign Doctor, Token & Queue\").item.json.estimatedTime }}</li></ul><p>Please collect the bill at the counter and give the receipt.</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital Bookings"
+        }
+      },
+      "id": "52af2ccc-f34d-4665-b1a1-7e4a09104582",
+      "name": "Email Receptionist",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1472,
+        32
+      ],
+      "webhookId": "96ec487e-2f3d-4a46-aebc-b6c64ece5b0e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UF07QwDotauBaGDy",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Appointment Confirmed!",
+        "completionMessage": "=Token: {{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel }} | Queue number: {{ $(\"Assign Doctor, Token & Queue\").item.json.queuePosition }}\nDoctor: {{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName }} | Room: {{ $(\"Assign Doctor, Token & Queue\").item.json.room }}\nEstimated consultation time: {{ $(\"Assign Doctor, Token & Queue\").item.json.estimatedTime }} ({{ $(\"Assign Doctor, Token & Queue\").item.json.waitText }})\nPlease pay the bill at the counter and take the receipt.\nDetails were also sent to your email. Hospital number: 9876543210",
+        "options": {}
+      },
+      "id": "a44e5a8f-7dde-4a0f-bbbd-69d86570df59",
+      "name": "Booking Confirmed Page",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1696,
+        32
+      ],
+      "webhookId": "6ab2d3b8-7198-432a-86b8-209ff59e1d7a"
+    },
+    {
+      "parameters": {
+        "sendTo": "spoorthykamireddygari@gmail.com",
+        "subject": "=ACTION NEEDED: no doctor for {{ $json.patientName }} ({{ $json.ward }})",
+        "message": "=<p>A patient could not be booked automatically: <b>{{ $json.reason }}</b>.</p><ul><li><b>Patient:</b> {{ $json.patientName }}, age {{ $json.patientAge }}</li><li><b>Phone / email:</b> {{ $json.patientPhone }} / {{ $json.patientEmail }}</li><li><b>Query:</b> {{ $json.query }}</li><li><b>Ward:</b> {{ $json.ward }}</li></ul><p>Please call the patient and arrange a doctor.</p>",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Neelima Hospital Bookings"
+        }
+      },
+      "id": "72bff708-6b07-4310-b644-9e7197163d27",
+      "name": "Alert Receptionist – No Doctor",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        224
+      ],
+      "webhookId": "689567d5-df00-40d9-b27e-9d5158d632ae",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UF07QwDotauBaGDy",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Sorry, no doctor is free right now",
+        "completionMessage": "Our receptionist has been informed and will call you shortly.\nFor urgent help call the hospital at 9876543210.",
+        "options": {}
+      },
+      "id": "ce2401be-b6fc-4e11-8c1b-6d42d2822aca",
+      "name": "No Doctor Page",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1024,
+        224
+      ],
+      "webhookId": "94e4aa17-6c21-4386-9c94-8530e282f08b"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "Booked At",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.bookedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "Patient Name",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.patientName }}",
+              "type": "string"
+            },
+            {
+              "id": "r3",
+              "name": "Age",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.patientAge }}",
+              "type": "string"
+            },
+            {
+              "id": "r4",
+              "name": "Email",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.patientEmail }}",
+              "type": "string"
+            },
+            {
+              "id": "r5",
+              "name": "Phone",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.patientPhone }}",
+              "type": "string"
+            },
+            {
+              "id": "r6",
+              "name": "Query",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.query }}",
+              "type": "string"
+            },
+            {
+              "id": "r7",
+              "name": "Ward",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.ward }}",
+              "type": "string"
+            },
+            {
+              "id": "r8",
+              "name": "Priority",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.priority }}",
+              "type": "string"
+            },
+            {
+              "id": "r9",
+              "name": "Doctor Name",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.doctorName || \"Not assigned\" }}",
+              "type": "string"
+            },
+            {
+              "id": "r10",
+              "name": "Room No",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.room || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "r11",
+              "name": "Token No",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.tokenLabel || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "r12",
+              "name": "Queue Number",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.queuePosition || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "r13",
+              "name": "Estimated Time",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.estimatedTime || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "r14",
+              "name": "Booking Status",
+              "value": "={{ $(\"Assign Doctor, Token & Queue\").item.json.found ? \"Booked\" : \"No doctor – receptionist alerted\" }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9d248a39-3a40-4119-a277-407cf82bd7e6",
+      "name": "Prepare Patient Record",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1072,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "cachedResultName": "Neelima Hospital dummy data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "624530442",
+          "cachedResultName": "Patient Records"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Booked At",
+              "displayName": "Booked At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Patient Name",
+              "displayName": "Patient Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Age",
+              "displayName": "Age",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Query",
+              "displayName": "Query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Ward",
+              "displayName": "Ward",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Priority",
+              "displayName": "Priority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Doctor Name",
+              "displayName": "Doctor Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Room No",
+              "displayName": "Room No",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Token No",
+              "displayName": "Token No",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Queue Number",
+              "displayName": "Queue Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Estimated Time",
+              "displayName": "Estimated Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Booking Status",
+              "displayName": "Booking Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "381d7827-cb29-42f7-9530-db47a666afed",
+      "name": "Save Patient Record",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1296,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "pk5KT2Le0epcxAAF",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "ab5590a3-80c7-4b42-bc67-073079db10d4",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "cachedResultName": "Neelima Hospital dummy data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "813743364",
+          "cachedResultName": "Sheet1"
+        },
+        "options": {}
+      },
+      "id": "379d7abd-f9b5-4d47-875a-888f6389e801",
+      "name": "Get Doctors for Timer",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        272,
+        448
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "pk5KT2Le0epcxAAF",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// One 15-minute slot has passed: each on-duty doctor finishes one patient.\nconst now = DateTime.now().setZone('Asia/Kolkata');\nconst nowMin = now.hour * 60 + now.minute;\nfunction toMin(t) {\n  const m = String(t).match(/(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?/i);\n  if (!m) return null;\n  let h = parseInt(m[1], 10);\n  const min = m[2] ? parseInt(m[2], 10) : 0;\n  const ap = (m[3] || '').toLowerCase();\n  if (ap === 'pm' && h < 12) h += 12;\n  if (ap === 'am' && h === 12) h = 0;\n  return h * 60 + min;\n}\nfunction shiftOf(text) {\n  const parts = String(text || '').split(/\\s*(?:–|—|-|to)\\s*/i).filter(p => p.trim() !== '');\n  if (parts.length < 2) return null;\n  const start = toMin(parts[0]);\n  const end = toMin(parts[1]);\n  if (start === null || end === null) return null;\n  return { start, end };\n}\nconst out = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  if (!d['Doctor Name']) continue;\n  const queue = parseInt(d['Queue count'], 10) || 0;\n  const shift = shiftOf(d['Available Time']);\n  let n = nowMin;\n  if (shift && shift.end <= shift.start) shift.end += 1440; // overnight shift\n  if (shift && shift.end > 1440 && n < shift.end - 1440) n += 1440;\n  const onDuty = shift ? (n >= shift.start && n < shift.end) : true;\n  const shiftOver = shift ? n >= shift.end : false;\n  let newQueue = queue;\n  if (shiftOver) newQueue = 0;\n  else if (onDuty && queue > 0) newQueue = queue - 1;\n  const cur = String(d['Status'] || '');\n  const keepStatus = /off duty|leave|on call/i.test(cur); // never overwrite these by the timer\n  const newStatus = keepStatus ? cur : (newQueue > 0 && onDuty ? 'Consulting' : 'Free');\n  if (newQueue !== queue || newStatus !== d['Status']) {\n    out.push({ json: { 'Doctor Name': d['Doctor Name'], Status: newStatus, 'Queue count': newQueue } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "d7d48497-e7c0-406b-a44c-7a3af8583af8",
+      "name": "Move Queue Forward",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1SLVnzzFpdvXIIz9zvIjvQpNGWo9iDbAi-O12PIdy4i4",
+          "cachedResultName": "Neelima Hospital dummy data"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "813743364",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Doctor Name": "={{ $json['Doctor Name'] }}",
+            "Status": "={{ $json.Status }}",
+            "Queue count": "={{ $json['Queue count'] }}"
+          },
+          "matchingColumns": [
+            "Doctor Name"
+          ],
+          "schema": [
+            {
+              "id": "Doctor Name",
+              "displayName": "Doctor Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Queue count",
+              "displayName": "Queue count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2ea31bbf-9169-4b8d-9d84-0f1b7664087e",
+      "name": "Update Doctor Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        720,
+        448
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "pk5KT2Le0epcxAAF",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Get All Doctors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Doctors": {
+      "main": [
+        [
+          {
+            "node": "Assign Doctor, Token & Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Doctor, Token & Queue": {
+      "main": [
+        [
+          {
+            "node": "Doctor Available?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Patient Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doctor Available?": {
+      "main": [
+        [
+          {
+            "node": "Update Doctor Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Receptionist – No Doctor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Doctor Queue": {
+      "main": [
+        [
+          {
+            "node": "Email Doctor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Doctor": {
+      "main": [
+        [
+          {
+            "node": "Email Patient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Patient": {
+      "main": [
+        [
+          {
+            "node": "Email Receptionist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Receptionist": {
+      "main": [
+        [
+          {
+            "node": "Booking Confirmed Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Receptionist – No Doctor": {
+      "main": [
+        [
+          {
+            "node": "No Doctor Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Patient Record": {
+      "main": [
+        [
+          {
+            "node": "Save Patient Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Doctors for Timer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Doctors for Timer": {
+      "main": [
+        [
+          {
+            "node": "Move Queue Forward",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move Queue Forward": {
+      "main": [
+        [
+          {
+            "node": "Update Doctor Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "cebb5406-d616-4cd3-a6f0-b3f6fca7f0ae",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "567eb70c805f7531e287bdcf78644ca45c7b8169e90f74bafe7681c4fc61ae55"
+  },
+  "nodeGroups": [
+    {
+      "id": "c641fb04-dae9-4800-ab73-f87e462c1412",
+      "name": "Triage and register patient",
+      "nodeIds": [
+        "8bface88-f652-4c0b-bf61-25b5d0c206b7",
+        "695de052-5ae9-44b8-8626-2668c2bf9ef5",
+        "5a3ce44f-2f43-4270-8692-f7a85e160692",
+        "9d248a39-3a40-4119-a277-407cf82bd7e6",
+        "381d7827-cb29-42f7-9530-db47a666afed",
+        "5b0cd2a9-31e9-407f-933f-8f080dd75660"
+      ],
+      "description": "Emergency and mental health go first; others get a slot. Every visit is saved as a new row in Patient Records"
+    },
+    {
+      "id": "90d3846b-4c8a-44d4-91a4-ad49824c4577",
+      "name": "Confirm the booking",
+      "nodeIds": [
+        "aa61e94c-2369-4a29-a4bb-73d09ba413b4",
+        "213bbe92-07c8-40c3-a1de-a3552fdcd44e",
+        "854b7a23-65d1-4af1-a752-f8109e5106f3",
+        "52af2ccc-f34d-4665-b1a1-7e4a09104582",
+        "a44e5a8f-7dde-4a0f-bbbd-69d86570df59"
+      ],
+      "description": "Saves the queue in the sheet, mails doctor, patient and receptionist, then shows the patient their token"
+    },
+    {
+      "id": "f43121b9-57c5-46dd-b416-d17f47c42ef7",
+      "name": "Handle no doctor",
+      "nodeIds": [
+        "72bff708-6b07-4310-b644-9e7197163d27",
+        "ce2401be-b6fc-4e11-8c1b-6d42d2822aca"
+      ],
+      "description": "When nobody can see the patient today, the receptionist is alerted and the patient is told to wait for a call"
+    },
+    {
+      "id": "c1d32c9e-7fff-4595-803c-4b8f1770bed9",
+      "name": "Free doctors over time",
+      "nodeIds": [
+        "379d7abd-f9b5-4d47-875a-888f6389e801",
+        "d7d48497-e7c0-406b-a44c-7a3af8583af8",
+        "2ea31bbf-9169-4b8d-9d84-0f1b7664087e"
+      ],
+      "description": "Every 15 minutes each on-duty doctor finishes one patient; doctors with an empty queue go back to Free"
+    }
+  ],
+  "id": "DD59NodJcqibHspt",
+  "tags": []
+}
